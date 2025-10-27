@@ -1,0 +1,86 @@
+//@version=5
+strategy("Range Filter - WhatsApp Alerts", overlay=true, pyramiding=1, 
+  default_qty_type=strategy.fixed, default_qty_value=75, calc_on_every_tick=false)
+
+// ------------------ User inputs ------------------
+src = input(defval=close, title="Source")
+per = input.int(defval=100, minval=1, title="Sampling Period")
+mult = input.float(defval=3.0, minval=0.1, title="Range Multiplier")
+
+// ------------------ Helper functions & filter calculation ------------------
+smoothrng(x, t, m) =>
+    wper = t * 2 - 1
+    avrng = ta.ema(math.abs(x - x[1]), t)
+    ta.ema(avrng, wper) * m
+
+smrng = smoothrng(src, per, mult)
+
+rngfilt(x, r) =>
+    f = x
+    f := x > nz(f[1]) ? x - r < nz(f[1]) ? nz(f[1]) : x - r :
+         x + r > nz(f[1]) ? nz(f[1]) : x + r
+    f
+
+filt = rngfilt(src, smrng)
+
+// Filter direction counts
+var float upward = 0.0
+upward := filt > filt[1] ? nz(upward[1]) + 1 : filt < filt[1] ? 0 : nz(upward[1])
+var float downward = 0.0
+downward := filt < filt[1] ? nz(downward[1]) + 1 : filt > filt[1] ? 0 : nz(downward[1])
+
+// Breakouts
+longCond = (src > filt and src > src[1] and upward > 0) or (src > filt and src < src[1] and upward > 0)
+shortCond = (src < filt and src < src[1] and downward > 0) or (src < filt and src > src[1] and downward > 0)
+
+// Prevent immediate flip noise
+var int CondIni = 0
+CondIni := longCond ? 1 : shortCond ? -1 : CondIni[1]
+longSignal = longCond and CondIni[1] != 1
+shortSignal = shortCond and CondIni[1] != -1
+
+// ------------------ Trading logic with WhatsApp Alerts ------------------
+if barstate.isconfirmed
+    // LONG signal
+    if longSignal and strategy.position_size <= 0
+        if strategy.position_size < 0
+            strategy.close("Short")
+        strategy.entry("Long", strategy.long)
+        
+        // 📱 SEND WHATSAPP ALERT FOR BUY
+        alert("🟢 BUY SIGNAL\n" + 
+              "━━━━━━━━━━━━━━━\n" +
+              "📊 Symbol: " + syminfo.ticker + "\n" +
+              "💰 Price: " + str.tostring(close, "#.##") + "\n" +
+              "📈 Signal: BUY\n" +
+              "⏰ Time: " + str.format("{0,time,HH:mm:ss}", time) + "\n" +
+              "📅 Date: " + str.format("{0,date,yyyy-MM-dd}", time) + "\n" +
+              "⏱️ Timeframe: " + timeframe.period + "\n" +
+              "🔔 Range Filter Strategy", 
+              alert.freq_once_per_bar_close)
+
+    // SHORT signal
+    if shortSignal and strategy.position_size >= 0
+        if strategy.position_size > 0
+            strategy.close("Long")
+        strategy.entry("Short", strategy.short)
+        
+        // 📱 SEND WHATSAPP ALERT FOR SELL
+        alert("🔴 SELL SIGNAL\n" + 
+              "━━━━━━━━━━━━━━━\n" +
+              "📊 Symbol: " + syminfo.ticker + "\n" +
+              "💰 Price: " + str.tostring(close, "#.##") + "\n" +
+              "📉 Signal: SELL\n" +
+              "⏰ Time: " + str.format("{0,time,HH:mm:ss}", time) + "\n" +
+              "📅 Date: " + str.format("{0,date,yyyy-MM-dd}", time) + "\n" +
+              "⏱️ Timeframe: " + timeframe.period + "\n" +
+              "🔔 Range Filter Strategy", 
+              alert.freq_once_per_bar_close)
+
+// ------------------ Visual plots (optional) ------------------
+plot(filt, color=color.new(color.blue, 0), linewidth=2, title="Range Filter")
+plotshape(longSignal, title="Buy Signal", style=shape.triangleup, location=location.belowbar, 
+          color=color.green, size=size.small)
+plotshape(shortSignal, title="Sell Signal", style=shape.triangledown, location=location.abovebar, 
+          color=color.red, size=size.small)
+

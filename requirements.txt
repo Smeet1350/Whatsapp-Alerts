@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+gunicorn
+twilio
+python-dotenv
+pydantic[email]
+
