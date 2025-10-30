@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Response
 from pydantic import BaseModel
 from twilio.rest import Client
 from dotenv import load_dotenv
@@ -62,6 +62,15 @@ def root():
 async def root_post():
     logger.warning("⚠️ POST to root / - should use /webhook instead")
     return {"error": "Use POST /webhook endpoint, not /"}
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True, "ts": datetime.utcnow().isoformat()}
+
+@app.head("/healthz")
+def healthz_head():
+    # minimal HEAD response without body
+    return Response(headers={"X-App": "tv-whatsapp", "X-OK": "1"})
 
 @app.post("/webhook")
 async def webhook(request: Request):
