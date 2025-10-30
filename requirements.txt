@@ -1,7 +1,4 @@
-fastapi
-uvicorn
-gunicorn
-twilio
-python-dotenv
-pydantic[email]
-
+fastapi==0.120.2
+uvicorn==0.38.0
+gunicorn==23.0.0
+twilio==9.8.5

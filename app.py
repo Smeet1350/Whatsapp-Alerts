@@ -1,117 +1,129 @@
+
 import os
 import json
 import logging
-from datetime import datetime
-from fastapi import FastAPI, Request, HTTPException, Response, BackgroundTasks, status
-from pydantic import BaseModel
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, Request, Response, BackgroundTasks, HTTPException, status
+from fastapi.responses import JSONResponse
+
 from twilio.rest import Client
-from dotenv import load_dotenv
 
-load_dotenv()
+# =============================
+# Structured logging
+# =============================
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("tv-whatsapp")
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# =============================
+# Env vars
+# =============================
+FROM_WHATSAPP = os.getenv("FROM_WHATSAPP", "whatsapp:+14155238886")  # Twilio sandbox sender
+TO_WHATSAPP   = os.getenv("TO_WHATSAPP", "whatsapp:+910000000000")   # your WhatsApp
+ACCOUNT_SID   = os.getenv("TWILIO_ACCOUNT_SID", "")
+AUTH_TOKEN    = os.getenv("TWILIO_AUTH_TOKEN", "")
+WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")  # optional shared secret for /webhook
 
-# Config
-ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-FROM_WHATSAPP = os.getenv("TWILIO_FROM_WHATSAPP", "whatsapp:+14155238886")
-TO_WHATSAPP = os.getenv("TWILIO_TO_WHATSAPP")
-WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN")
+if not ACCOUNT_SID or not AUTH_TOKEN:
+    logger.warning("⚠️ TWILIO CREDS missing. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN env vars.")
+else:
+    logger.info("✅ Twilio credentials detected")
 
-if not all([ACCOUNT_SID, AUTH_TOKEN, FROM_WHATSAPP, TO_WHATSAPP, WEBHOOK_TOKEN]):
-    missing = [k for k, v in {
-        "TWILIO_ACCOUNT_SID": ACCOUNT_SID,
-        "TWILIO_AUTH_TOKEN": AUTH_TOKEN,
-        "TWILIO_FROM_WHATSAPP": FROM_WHATSAPP,
-        "TWILIO_TO_WHATSAPP": TO_WHATSAPP,
-        "WEBHOOK_TOKEN": WEBHOOK_TOKEN
-    }.items() if not v]
-    raise RuntimeError(f"Missing env vars: {', '.join(missing)}")
+logger.info("📱 FROM: %s", FROM_WHATSAPP)
+logger.info("📱 TO:   %s", TO_WHATSAPP)
+logger.info("🔑 Webhook Token: %s", "set" if WEBHOOK_TOKEN else "not-set")
 
 client = Client(ACCOUNT_SID, AUTH_TOKEN)
-app = FastAPI(title="TradingView → WhatsApp")
 
-# Log startup info
-@app.on_event("startup")
-async def startup_event():
-    logger.info("=" * 60)
-    logger.info("🚀 TradingView → WhatsApp Server Starting...")
-    logger.info("=" * 60)
-    logger.info(f"📱 FROM: {FROM_WHATSAPP}")
-    logger.info(f"📱 TO: {TO_WHATSAPP}")
-    logger.info(f"🔑 Webhook Token: {WEBHOOK_TOKEN}")
-    logger.info(f"✅ Twilio Client initialized")
-    logger.info("=" * 60)
+app = FastAPI(title="TradingView → WhatsApp", version="1.0.0")
 
-class TVPayload(BaseModel):
-    # TradingView often sends arbitrary JSON; accept anything
-    # but keep a conventional 'message' field if provided.
-    message: str | None = None
+# =============================
+# Helpers
+# =============================
+def utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
+def _send_whatsapp(text: str):
+    \"\"\"Background task: send WhatsApp message via Twilio.\"\"\"
+    try:
+        text = (text or "").strip()
+        if not text:
+            text = "(empty body)"
+        text = text[:1600]  # Safety trim
+        msg = client.messages.create(from_=FROM_WHATSAPP, to=TO_WHATSAPP, body=text)
+        logger.info("✅ SENT (bg) SID=%s status=%s", getattr(msg, "sid", "?"), getattr(msg, "status", "?"))
+    except Exception as e:
+        logger.exception("❌ TWILIO ERROR (bg): %s", e)
+
+# =============================
+# Root & Health
+# =============================
 @app.get("/")
 def root():
-    logger.info("📥 GET request to root /")
-    return {"ok": True, "msg": "Server is running! Use POST /webhook for alerts"}
-
-@app.post("/")
-async def root_post():
-    logger.warning("⚠️ POST to root / - should use /webhook instead")
-    return {"error": "Use POST /webhook endpoint, not /"}
+    logger.info("📥 GET /")
+    return {
+        "ok": True,
+        "now": utcnow_iso(),
+        "service": "tv-to-whatsapp",
+        "health": "/healthz",
+        "webhook": "/webhook",
+        "docs": "/docs"
+    }
 
 @app.head("/")
 def root_head():
-    # Respond to Render/UptimeRobot HEAD checks at "/"
+    # Respond to HEAD / from Render or monitors
     return Response(headers={"X-Root": "1"})
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "ts": datetime.utcnow().isoformat()}
+    return {"ok": True, "now": utcnow_iso()}
 
 @app.head("/healthz")
 def healthz_head():
     return Response(headers={"X-App": "tv-whatsapp", "X-OK": "1"})
 
-def _send_whatsapp(text: str):
+# =============================
+# Manual test sender
+# =============================
+@app.get("/send/test")
+def send_test(q: str = "Hello from /send/test!"):
     try:
-        msg = client.messages.create(
-            from_=FROM_WHATSAPP,
-            to=TO_WHATSAPP,
-            body=text[:1600],
-        )
-        logger.info(f"✅ SENT (bg) SID={msg.sid} status={msg.status}")
+        msg = client.messages.create(from_=FROM_WHATSAPP, to=TO_WHATSAPP, body=q[:1600])
+        return {"ok": True, "sid": getattr(msg, "sid", "?"), "status": getattr(msg, "status", "?")}
     except Exception as e:
-        logger.exception(f"❌ TWILIO ERROR (bg): {e}")
+        logger.exception("❌ /send/test failed")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
+# =============================
+# Webhook — ACK fast, process later
+# =============================
 @app.post("/webhook", status_code=status.HTTP_202_ACCEPTED)
 async def webhook(request: Request, background_tasks: BackgroundTasks):
     logger.info("=" * 60)
-    logger.info("📥 WEBHOOK RECEIVED!")
+    logger.info("📨 WEBHOOK RECEIVED")
 
-    # Optional token check (keep your existing lines if you use a token)
-    token = request.headers.get("X-Webhook-Token")
+    # Optional shared-secret header
+    token = request.headers.get("X-Webhook-Token", "")
     if WEBHOOK_TOKEN and token != WEBHOOK_TOKEN:
-        logger.error("❌ UNAUTHORIZED: Token mismatch!")
+        logger.error("❌ Unauthorized: token mismatch")
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    payload_text = await request.body()
+    # Read body (raw and json-friendly)
+    body_bytes = await request.body()
+    text = ""
     try:
-        # pretty format if JSON, else raw
+        payload = await request.json()
+        text = json.dumps(payload, indent=2)
+    except Exception:
         try:
-            body_json = json.loads(payload_text)
-            text = json.dumps(body_json, indent=2)[:1600]
+            text = body_bytes.decode("utf-8", errors="ignore")
         except Exception:
-            text = payload_text.decode("utf-8", errors="ignore")[:1600]
-    except Exception as e:
-        logger.exception(f"Failed reading body: {e}")
-        text = "(no body)"
+            text = "(no body)"
+    text = text[:1600]
 
-    # Queue the actual send so we can ACK immediately
+    # Queue background send and ACK immediately
     background_tasks.add_task(_send_whatsapp, text)
-    logger.info("🟢 ACK 202 — send scheduled in background")
-    return {"accepted": True, "queued_at": datetime.utcnow().isoformat()}
-
+    logger.info("🟢 ACK 202 — queued background send")
+    return {"accepted": True, "queued_at": utcnow_iso()}
