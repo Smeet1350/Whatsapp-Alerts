@@ -101,14 +101,8 @@ def send_test(q: str = "Hello from /send/test!"):
 # =============================
 @app.post("/webhook", status_code=status.HTTP_202_ACCEPTED)
 async def webhook(request: Request, background_tasks: BackgroundTasks):
-    logger.info("=" * 60)
+    """Receives TradingView alert and sends to WhatsApp in background."""
     logger.info("📨 WEBHOOK RECEIVED")
-
-    # Optional shared-secret header
-    token = request.headers.get("X-Webhook-Token", "")
-    if WEBHOOK_TOKEN and token != WEBHOOK_TOKEN:
-        logger.error("❌ Unauthorized: token mismatch")
-        raise HTTPException(status_code=401, detail="Unauthorized")
 
     # Read body (raw and json-friendly)
     body_bytes = await request.body()
