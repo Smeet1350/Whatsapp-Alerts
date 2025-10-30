@@ -45,7 +45,7 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 def _send_whatsapp(text: str):
-    \"\"\"Background task: send WhatsApp message via Twilio.\"\"\"
+    """Background task: send WhatsApp message via Twilio."""
     try:
         text = (text or "").strip()
         if not text:
